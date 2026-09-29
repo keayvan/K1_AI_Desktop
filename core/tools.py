@@ -87,10 +87,8 @@ def _add_markdown_runs(paragraph, text):
             paragraph.add_run(part).bold = (i % 2 == 1)
 
 
-def write_docx(target, content):
-    """Convert simple Markdown (headings, bullets, numbered lists, bold) to a real .docx."""
-    from docx import Document
-    doc = Document()
+def _add_markdown(doc, content):
+    """Add simple Markdown (headings, bullets, numbered lists, bold) to a docx Document."""
     for line in content.splitlines():
         stripped = line.strip()
         heading = re.match(r'^(#{1,6})\s+(.*)', stripped)
@@ -102,6 +100,12 @@ def write_docx(target, content):
             _add_markdown_runs(doc.add_paragraph(style='List Number'), re.sub(r'^\d+\.\s+', '', stripped))
         elif stripped and set(stripped) != {'-'}:
             _add_markdown_runs(doc.add_paragraph(), stripped)
+
+
+def write_docx(target, content):
+    from docx import Document
+    doc = Document()
+    _add_markdown(doc, content)
     doc.save(target)
 
 
@@ -135,6 +139,70 @@ def trash_file(base, rel_path):
         if result.returncode != 0:
             return f"[Error: {result.stderr.strip()}]"
         return f"[Moved to Trash: {target}]"
+    except Exception as e:
+        return f"[Error: {e}]"
+
+
+def append_file(base, rel_path, content):
+    """Add content to the end of a file. Existing .docx formatting is kept."""
+    target = resolve_in_folder(base, rel_path)
+    if not target:
+        return f"[Not allowed: {rel_path} is outside the project folder]"
+    if not os.path.isfile(target):
+        return write_file(base, rel_path, content)
+    try:
+        if target.lower().endswith('.docx'):
+            from docx import Document
+            doc = Document(target)
+            _add_markdown(doc, content)
+            doc.save(target)
+        else:
+            with open(target, 'a', encoding='utf-8') as f:
+                f.write(("\n" if not content.startswith("\n") else "") + content)
+        return f"[Appended {len(content)} chars to {target}]"
+    except Exception as e:
+        return f"[Error: {e}]"
+
+
+def replace_in_file(base, rel_path, old, new):
+    """Replace text in a file. In .docx, runs keep their formatting when possible."""
+    target = resolve_in_folder(base, rel_path)
+    if not target:
+        return f"[Not allowed: {rel_path} is outside the project folder]"
+    if not os.path.isfile(target):
+        return "[Not found]"
+    if not old:
+        return "[Nothing to replace: 'old' is empty]"
+    try:
+        if target.lower().endswith('.docx'):
+            from docx import Document
+            doc = Document(target)
+            count = 0
+            paragraphs = list(doc.paragraphs) + [p for t in doc.tables for row in t.rows for cell in row.cells for p in cell.paragraphs]
+            for p in paragraphs:
+                if old not in p.text:
+                    continue
+                hits = sum(r.text.count(old) for r in p.runs)
+                if hits:
+                    for r in p.runs:
+                        r.text = r.text.replace(old, new)
+                    count += hits
+                else:
+                    count += p.text.count(old)
+                    text = p.text.replace(old, new)
+                    for r in p.runs[1:]:
+                        r.text = ""
+                    p.runs[0].text = text
+            if count:
+                doc.save(target)
+        else:
+            with open(target, 'r', encoding='utf-8', errors='ignore') as f:
+                text = f.read()
+            count = text.count(old)
+            if count:
+                with open(target, 'w', encoding='utf-8') as f:
+                    f.write(text.replace(old, new))
+        return f"[Replaced {count} occurrence(s) in {target}]" if count else f"[Text not found in {target}]"
     except Exception as e:
         return f"[Error: {e}]"
 
