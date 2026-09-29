@@ -22,6 +22,32 @@ def resolve_in_folder(base, rel_path):
     return target if os.path.commonpath([base, target]) == base else None
 
 
+def docx_to_markdown(target):
+    """Read a .docx as Markdown: headings, lists, bold and equations (as $LaTeX$) are kept."""
+    import pypandoc
+    return pypandoc.convert_file(target, 'markdown-simple_tables-multiline_tables-grid_tables+pipe_tables',
+                                 format='docx', extra_args=['--wrap=none']).strip()
+
+
+BACKUP_DIR = Path(__file__).resolve().parent.parent / "data" / "backups"
+
+
+def backup(target):
+    """Copy a file (or folder) to data/backups/<time>/ before it is changed. Returns the backup path."""
+    import shutil
+    from datetime import datetime
+    if not os.path.lexists(target):
+        return None
+    dest_dir = BACKUP_DIR / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / os.path.basename(target)
+    if os.path.isdir(target):
+        shutil.copytree(target, dest, symlinks=True)
+    else:
+        shutil.copy2(target, dest)
+    return str(dest)
+
+
 def read_file(base, rel_path, limit=2000):
     target = resolve_in_folder(base, rel_path)
     if not target:
@@ -30,10 +56,12 @@ def read_file(base, rel_path, limit=2000):
         return "[Not found]"
     if target.lower().endswith('.docx'):
         try:
-            from docx import Document
-            return "\n".join(p.text for p in Document(target).paragraphs)[:limit]
+            text = docx_to_markdown(target)
         except Exception as e:
             return f"[Cannot read docx: {e}]"
+        if len(text) > limit:
+            return text[:limit] + f"\n\n[Truncated: showing {limit} of {len(text)} characters]"
+        return text
     try:
         with open(target, 'r', encoding='utf-8', errors='ignore') as f:
             return f.read(limit)
@@ -91,7 +119,11 @@ MATH_RE = re.compile(r'\$\$.+?\$\$|\\\(.+?\\\)|\\\[.+?\\\]|(?<![\\$])\$[^$\s][^$
 
 
 def _join_math_blocks(content):
-    """Put multi-line $$...$$ or \\[...\\] blocks on one line so each becomes one paragraph."""
+    """Put multi-line $$...$$ or \\[...\\] blocks on one line so each becomes one paragraph.
+
+    Also trims spaces inside inline math ("$ T $" -> "$T$"), which pandoc would not treat as math.
+    """
+    content = re.sub(r'(?<![$\\])\$[ \t]+([^$\n]+?)[ \t]+\$(?!\$)', r'$\1$', content)
     content = re.sub(r'\$\$(.+?)\$\$', lambda m: '$$' + ' '.join(m.group(1).split()) + '$$', content, flags=re.S)
     return re.sub(r'\\\[(.+?)\\\]', lambda m: '$$' + ' '.join(m.group(1).split()) + '$$', content, flags=re.S)
 
@@ -155,7 +187,7 @@ def fix_docx_math(target):
     doc = Document(target)
     count = 0
     for paragraph in doc.paragraphs:
-        text = paragraph.text.strip()
+        text = _join_math_blocks(paragraph.text.strip())
         if not MATH_RE.search(text):
             continue
         try:
@@ -188,13 +220,15 @@ def write_file(base, rel_path, content):
     if not target:
         return f"[Not allowed: {rel_path} is outside the project folder]"
     try:
+        saved = backup(target)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if target.lower().endswith('.docx'):
             write_docx(target, content)
         else:
             with open(target, 'w', encoding='utf-8') as f:
                 f.write(content)
-        return f"[Wrote {len(content)} chars to {target}]"
+        note = f" (previous version backed up to {saved})" if saved else ""
+        return f"[Wrote {len(content)} chars to {target}{note}]"
     except Exception as e:
         return f"[Error: {e}]"
 
@@ -225,6 +259,7 @@ def append_file(base, rel_path, content):
     if not os.path.isfile(target):
         return f"[Not found: {rel_path}. Use list_files to check the name, or write_file to create a new file]"
     try:
+        backup(target)
         if target.lower().endswith('.docx'):
             from docx import Document
             doc = Document(target)
@@ -248,6 +283,7 @@ def replace_in_file(base, rel_path, old, new):
     if not old:
         return "[Nothing to replace: 'old' is empty]"
     try:
+        backup(target)
         if target.lower().endswith('.docx'):
             from docx import Document
             doc = Document(target)

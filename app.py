@@ -7,7 +7,7 @@ from core import storage
 from core import agent
 from core.tools import get_system_stats, process_uploaded_file
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 st.set_page_config(page_title=f"K1 AI Desktop v{APP_VERSION}", layout="wide")
 

@@ -19,12 +19,13 @@ def _tool(name, description, **params):
 TOOLS = [
     _tool('list_files', 'List files in the project folder or a subfolder.',
           path={'type': 'string', 'description': 'Subfolder, relative. Default "."', 'optional': True}),
-    _tool('read_file', 'Read a file (text, code, or .docx). Always read a file before editing it.',
+    _tool('read_file', 'Read a file (text, code, or .docx). A .docx is shown as Markdown with $LaTeX$ equations. Always read a file before editing it.',
           path={'type': 'string', 'description': 'Path relative to the project folder'}),
     _tool('run_command', f"Run a read-only command. Allowed: {', '.join(sorted(tools.READ_ONLY_COMMANDS))} "
                          f"(git only: {', '.join(sorted(tools.GIT_READ_ONLY))}). No pipes, redirects or &&.",
           command={'type': 'string'}),
-    _tool('write_file', 'Create a new file or fully overwrite one. For .docx write Markdown '
+    _tool('write_file', 'Create a new file, or REPLACE ALL of an existing one (everything not in content is lost). '
+                        'To extend or improve a document, read it first and include ALL existing content. For .docx write Markdown '
                         '(# headings, - bullets, **bold**, $$LaTeX$$ equations); it becomes real Word formatting.',
           path={'type': 'string'}, content={'type': 'string'}),
     _tool('append_file', 'Add content to the end of an existing file, keeping what is there. Same Markdown rules for .docx.',
