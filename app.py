@@ -1,14 +1,13 @@
-import json
 import time
 
 import streamlit as st
 from ollama import Client
 
 from core import storage
-from core.agent import PLAN_SCHEMA, decision_prompt, analysis_prompt, run_plan
-from core.tools import extract_json, get_folder_context, get_system_stats, process_uploaded_file
+from core import agent
+from core.tools import get_system_stats, process_uploaded_file
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "2.0.0"
 
 st.set_page_config(page_title=f"K1 AI Desktop v{APP_VERSION}", layout="wide")
 
@@ -217,65 +216,33 @@ if user_input:
             status.code(body, language=lang)
         refresh_monitor()
 
-    def stream_answer(chunks, get_text):
-        answer = ""
-        with response_placeholder.container():
-            box = st.empty()
-            for chunk in chunks:
-                check_stop()
-                answer += get_text(chunk)
-                box.markdown(answer)
-                refresh_monitor()
-        return answer
+    response_box = response_placeholder.empty()
+
+    def show_text(text):
+        response_box.markdown(text)
+        refresh_monitor()
 
     try:
         refresh_monitor(force=True)
         check_stop()
 
-        uploaded_context = ""
+        messages = []
         if st.session_state.uploaded_files_content:
-            uploaded_context = "\n\nUploaded Files:\n"
+            uploaded_context = "Uploaded Files:\n"
             for fname, fdata in st.session_state.uploaded_files_content.items():
                 uploaded_context += f"\nFile: {fname} ({fdata['type']})\n```\n{fdata['content']}\n```\n"
+            messages.append({'role': 'system', 'content': uploaded_context})
             log_step("Attached uploaded files",
                      "\n".join(f"- {n} ({d['type']})" for n, d in st.session_state.uploaded_files_content.items()), "text")
+        messages += [{'role': m['role'], 'content': m['content']} for m in st.session_state.chat_history]
 
         folder = st.session_state.current_folder
         if folder:
-            folder_context = get_folder_context(folder)
-            log_step(f"1. Scanned folder: {folder}", folder_context, "text")
-            context = folder_context + uploaded_context
-
-            status.update(label=f"2. Planning with {model}...")
-            status.markdown(f"**2. Planning with {model}** (raw model output)")
-            plan_box = status.empty()
-            full_response = ""
-            for chunk in client.generate(model=model, prompt=decision_prompt(context, user_input), stream=True, think=False, format=PLAN_SCHEMA):
-                check_stop()
-                full_response += chunk['response']
-                plan_box.code(full_response, language="json")
-                refresh_monitor()
-            steps.append({'title': f"2. Planning with {model} (raw model output)", 'body': full_response, 'lang': "json"})
-
-            decision = extract_json(full_response)
-            log_step(f"Plan: {decision.get('plan', '')}",
-                     json.dumps({k: decision.get(k, []) for k in ('files', 'commands', 'write', 'append', 'replace', 'delete')}, indent=2, ensure_ascii=False), "json")
-
-            results = run_plan(decision, folder, log_step, check_stop)
-            check_stop()
-
-            log_step("5. Generating answer...")
-            answer = stream_answer(
-                client.generate(model=model, prompt=analysis_prompt(context, user_input, results), stream=True, think=think),
-                lambda c: c['response'])
+            log_step(f"Project folder: {folder}")
         else:
             log_step("Chat mode (no project folder)")
-            messages = [{'role': 'system', 'content': uploaded_context}] if uploaded_context else []
-            messages += [{'role': m['role'], 'content': m['content']} for m in st.session_state.chat_history]
-            status.update(label=f"Chatting with {model}...")
-            answer = stream_answer(
-                client.chat(model=model, messages=messages, stream=True, think=think),
-                lambda c: c['message']['content'])
+        status.update(label=f"Working with {model}...")
+        answer = agent.run(client, model, messages, folder, think, log_step, check_stop, show_text)
 
         elapsed = time.time() - start_time
         refresh_monitor(force=True)

@@ -223,7 +223,7 @@ def append_file(base, rel_path, content):
     if not target:
         return f"[Not allowed: {rel_path} is outside the project folder]"
     if not os.path.isfile(target):
-        return write_file(base, rel_path, content)
+        return f"[Not found: {rel_path}. Use list_files to check the name, or write_file to create a new file]"
     try:
         if target.lower().endswith('.docx'):
             from docx import Document

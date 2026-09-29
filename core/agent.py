@@ -1,132 +1,145 @@
-"""Prompts and plan execution for project mode: plan -> read/run/write -> answer."""
-import json
+"""Agent loop: the model calls tools, sees each result, and decides the next step."""
+import os
 
-from core.tools import READ_ONLY_COMMANDS, GIT_READ_ONLY, read_file, execute_command, write_file, append_file, replace_in_file, trash_file
+from core import tools
 
-MAX_FILES = 3
-MAX_COMMANDS = 2
-MAX_WRITES = 3
-MAX_DELETES = 5
-
-# Passed to Ollama as `format` so the model must return valid JSON with these keys.
-PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "files": {"type": "array", "items": {"type": "string"}},
-        "commands": {"type": "array", "items": {"type": "string"}},
-        "write": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-                "required": ["path", "content"],
-            },
-        },
-        "append": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-                "required": ["path", "content"],
-            },
-        },
-        "replace": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
-                "required": ["path", "old", "new"],
-            },
-        },
-        "delete": {"type": "array", "items": {"type": "string"}},
-        "plan": {"type": "string"},
-    },
-    "required": ["files", "commands", "write", "append", "replace", "delete", "plan"],
-}
+MAX_STEPS = 12
+READ_LIMIT = 8000
+OPTIONS = {'num_ctx': 8192}
 
 
-def decision_prompt(context, user_input):
-    return f"""{context}
-
-User: {user_input}
-
-RESPOND WITH ONLY JSON (no other text). Keys:
-- "files": files to read (paths relative to the project folder)
-- "commands": read-only commands to run. Allowed: {', '.join(sorted(READ_ONLY_COMMANDS))} (git only: {', '.join(sorted(GIT_READ_ONLY))}). No pipes, redirects or &&. To read a file (including .docx), put it in "files", not in a command.
-- "write": NEW files to create (or fully overwrite), as {{"path": "...", "content": "..."}}
-- "append": add text to the END of an existing file, as {{"path": "...", "content": "..."}}. Use this when the user asks to add something to a file; the existing content is kept.
-- "replace": change text inside an existing file, as {{"path": "...", "old": "exact text", "new": "new text"}}
-For .docx, write content as Markdown (# headings, - bullets, **bold**); it becomes real Word formatting.
-- "delete": files or folders to delete (they are moved to the Trash, so the user can restore them). Only when the user asks to delete.
-- "plan": what you will do
-Example:
-{{"files": ["file1.py"], "commands": ["git log -5"], "write": [{{"path": "notes.txt", "content": "text"}}], "append": [], "replace": [], "delete": ["old.txt"], "plan": "what you will do"}}
-Use empty lists for anything not needed."""
+def _tool(name, description, **params):
+    required = [k for k, v in params.items() if not v.pop('optional', False)]
+    return {'type': 'function', 'function': {
+        'name': name, 'description': description,
+        'parameters': {'type': 'object', 'properties': params, 'required': required},
+    }}
 
 
-def analysis_prompt(context, user_input, results):
-    return f"""{context}
+TOOLS = [
+    _tool('list_files', 'List files in the project folder or a subfolder.',
+          path={'type': 'string', 'description': 'Subfolder, relative. Default "."', 'optional': True}),
+    _tool('read_file', 'Read a file (text, code, or .docx). Always read a file before editing it.',
+          path={'type': 'string', 'description': 'Path relative to the project folder'}),
+    _tool('run_command', f"Run a read-only command. Allowed: {', '.join(sorted(tools.READ_ONLY_COMMANDS))} "
+                         f"(git only: {', '.join(sorted(tools.GIT_READ_ONLY))}). No pipes, redirects or &&.",
+          command={'type': 'string'}),
+    _tool('write_file', 'Create a new file or fully overwrite one. For .docx write Markdown '
+                        '(# headings, - bullets, **bold**, $$LaTeX$$ equations); it becomes real Word formatting.',
+          path={'type': 'string'}, content={'type': 'string'}),
+    _tool('append_file', 'Add content to the end of an existing file, keeping what is there. Same Markdown rules for .docx.',
+          path={'type': 'string'}, content={'type': 'string'}),
+    _tool('replace_in_file', 'Replace exact text inside a file. Read the file first so "old" matches exactly.',
+          path={'type': 'string'}, old={'type': 'string'}, new={'type': 'string'}),
+    _tool('delete_file', 'Move a file or folder to the Trash (the user can restore it). Only when the user asks.',
+          path={'type': 'string'}),
+]
 
-User: {user_input}
-
-Files: {json.dumps(results['files'], ensure_ascii=False)[:1000]}
-
-Commands: {json.dumps(results['commands'], ensure_ascii=False)[:1000]}
-
-Written files: {json.dumps(results['writes'], ensure_ascii=False)[:1000]}
-
-Appended: {json.dumps(results['appends'], ensure_ascii=False)[:1000]}
-
-Replaced: {json.dumps(results['replaces'], ensure_ascii=False)[:1000]}
-
-Deleted (moved to Trash): {json.dumps(results['deletes'], ensure_ascii=False)[:1000]}
-
-Provide answer."""
+SYSTEM_PROMPT = """You are K1, an assistant working inside the user's project folder: {folder}
+Use the tools to look at and change files. Paths are relative to the project folder, e.g. "notes.docx", not "{folder}/notes.docx".
+Work step by step: look first (list_files, read_file), then act, then check the result if needed.
+When the task is done, stop calling tools and give a short answer saying what you did."""
 
 
-def run_plan(decision, folder, log, check_stop):
-    """Carry out the model's plan. log(title, body, lang) reports each step."""
-    results = {'files': {}, 'commands': {}, 'writes': {}, 'appends': {}, 'replaces': {}, 'deletes': {}}
+def normalize_path(folder, path):
+    """Make a model-given path relative to the project folder.
 
-    for idx, path in enumerate(decision.get("files", [])[:MAX_FILES]):
+    Small models often repeat the folder name ("thermo/file.docx") or give the full path.
+    """
+    path = str(path).strip() or '.'
+    base = os.path.realpath(folder)
+    if os.path.isabs(path):
+        return os.path.relpath(path, base) if os.path.commonpath([base, os.path.realpath(path)]) == base else path
+    for prefix in (folder.rstrip('/') + '/', os.path.basename(base) + '/'):
+        if path.startswith(prefix) and not os.path.exists(os.path.join(base, path)):
+            return path[len(prefix):] or '.'
+    return path
+
+
+def run_tool(name, args, folder):
+    args = args or {}
+    path = normalize_path(folder, args.get('path', '.'))
+    if name == 'list_files':
+        base = tools.resolve_in_folder(folder, path)
+        if not base:
+            return f"[Not allowed: {path} is outside the project folder]"
+        return "\n".join(tools.scan_folder(base, max_files=100)) or "[Empty folder]"
+    if name == 'read_file':
+        return tools.read_file(folder, path, limit=READ_LIMIT)
+    if name == 'run_command':
+        return tools.execute_command(str(args.get('command', '')), folder)
+    if name == 'write_file':
+        return tools.write_file(folder, path, str(args.get('content', '')))
+    if name == 'append_file':
+        return tools.append_file(folder, path, str(args.get('content', '')))
+    if name == 'replace_in_file':
+        return tools.replace_in_file(folder, path, str(args.get('old', '')), str(args.get('new', '')))
+    if name == 'delete_file':
+        return tools.trash_file(folder, path)
+    return f"[Unknown tool: {name}]"
+
+
+def _describe(name, args):
+    args = args or {}
+    if name == 'run_command':
+        return f"$ {args.get('command', '')}"
+    detail = str(args.get('path', '.'))
+    if name == 'replace_in_file':
+        detail += f" ({str(args.get('old', ''))[:40]!r} → {str(args.get('new', ''))[:40]!r})"
+    return f"{name}: {detail}"
+
+
+def _step_body(name, args, result):
+    args = args or {}
+    if name in ('write_file', 'append_file'):
+        return f"{result}\n\n{str(args.get('content', ''))[:800]}", "text"
+    if name == 'run_command':
+        return result, "bash"
+    return str(result)[:800], "text"
+
+
+def run(client, model, messages, folder, think, log, check_stop, on_text):
+    """Run the loop and return the final answer.
+
+    messages: chat history (role/content). folder: project folder, or "" for plain chat (no tools).
+    log(title, body, lang) reports a step; on_text(text) shows the reply as it streams.
+    """
+    convo = list(messages)
+    if folder:
+        convo.insert(0, {'role': 'system', 'content': SYSTEM_PROMPT.format(folder=folder)})
+    tool_list = TOOLS if folder else None
+
+    for step in range(1, MAX_STEPS + 1):
         check_stop()
-        content = read_file(folder, str(path))
-        results['files'][path] = content
-        log(f"3.{idx + 1} Read file: {path}", content[:800], "text")
+        content, calls = "", []
+        for chunk in client.chat(model=model, messages=convo, tools=tool_list, stream=True, think=think, options=OPTIONS):
+            check_stop()
+            if chunk.message.content:
+                content += chunk.message.content
+                on_text(content)
+            if chunk.message.tool_calls:
+                calls.extend(chunk.message.tool_calls)
 
-    for idx, cmd in enumerate(decision.get("commands", [])[:MAX_COMMANDS]):
+        convo.append({'role': 'assistant', 'content': content, 'tool_calls': calls})
+        if not calls:
+            return content
+        if content.strip():
+            log(f"{step}. Model: {content.strip()[:80]}", content, "text")
+            on_text("")
+
+        for call in calls:
+            check_stop()
+            name, args = call.function.name, call.function.arguments
+            result = run_tool(name, args, folder)
+            body, lang = _step_body(name, args, result)
+            log(f"{step}. {_describe(name, args)}", body, lang)
+            convo.append({'role': 'tool', 'content': str(result), 'tool_name': name})
+
+    log(f"Reached the limit of {MAX_STEPS} steps", None, None)
+    convo.append({'role': 'user', 'content': 'Stop using tools now and summarize what you did and what is left.'})
+    content = ""
+    for chunk in client.chat(model=model, messages=convo, stream=True, think=think, options=OPTIONS):
         check_stop()
-        output = execute_command(str(cmd), folder)
-        results['commands'][cmd] = output
-        log(f"4.{idx + 1} Ran command: $ {cmd}", output, "bash")
-
-    writes = [w for w in decision.get("write", []) if isinstance(w, dict) and w.get("path")][:MAX_WRITES]
-    for idx, w in enumerate(writes):
-        check_stop()
-        content = str(w.get("content", ""))
-        outcome = write_file(folder, str(w["path"]), content)
-        results['writes'][w["path"]] = outcome
-        log(f"4w.{idx + 1} Wrote file: {w['path']}", f"{outcome}\n\n{content[:800]}", "text")
-
-    appends = [w for w in decision.get("append", []) if isinstance(w, dict) and w.get("path")][:MAX_WRITES]
-    for idx, w in enumerate(appends):
-        check_stop()
-        content = str(w.get("content", ""))
-        outcome = append_file(folder, str(w["path"]), content)
-        results['appends'][w["path"]] = outcome
-        log(f"4a.{idx + 1} Appended to: {w['path']}", f"{outcome}\n\n{content[:800]}", "text")
-
-    replaces = [w for w in decision.get("replace", []) if isinstance(w, dict) and w.get("path")][:MAX_WRITES]
-    for idx, w in enumerate(replaces):
-        check_stop()
-        outcome = replace_in_file(folder, str(w["path"]), str(w.get("old", "")), str(w.get("new", "")))
-        results['replaces'][w["path"]] = outcome
-        log(f"4r.{idx + 1} Replaced in: {w['path']}", f"{outcome}\n\n- {w.get('old', '')}\n+ {w.get('new', '')}", "diff")
-
-    for idx, path in enumerate(decision.get("delete", [])[:MAX_DELETES]):
-        check_stop()
-        outcome = trash_file(folder, str(path))
-        results['deletes'][path] = outcome
-        log(f"4d.{idx + 1} Deleted (to Trash): {path}", outcome, "text")
-
-    return results
+        content += chunk.message.content or ""
+        on_text(content)
+    return content
