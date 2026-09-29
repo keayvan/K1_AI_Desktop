@@ -3,3 +3,4 @@ ollama
 psutil
 python-docx
 PyPDF2
+pypandoc_binary

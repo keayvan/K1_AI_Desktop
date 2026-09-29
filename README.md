@@ -24,7 +24,7 @@ To keep Ollama's models inside this folder, run `./setup_models.sh` once (needs 
 ```
 app.py            Streamlit UI
 core/storage.py   projects and chat history (data/)
-core/tools.py     read files, read-only commands, write files (.docx too), delete to Trash
+core/tools.py     read files, read-only commands, write/append/replace (.docx too, LaTeX becomes Word equations), delete to Trash
 core/agent.py     prompts and plan execution
 run.sh            start the app with .venv
 setup_models.sh   move Ollama models into models/

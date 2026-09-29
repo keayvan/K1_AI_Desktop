@@ -87,19 +87,93 @@ def _add_markdown_runs(paragraph, text):
             paragraph.add_run(part).bold = (i % 2 == 1)
 
 
+MATH_RE = re.compile(r'\$\$.+?\$\$|\\\(.+?\\\)|\\\[.+?\\\]|(?<![\\$])\$[^$\s][^$]*?\$')
+
+
+def _join_math_blocks(content):
+    """Put multi-line $$...$$ or \\[...\\] blocks on one line so each becomes one paragraph."""
+    content = re.sub(r'\$\$(.+?)\$\$', lambda m: '$$' + ' '.join(m.group(1).split()) + '$$', content, flags=re.S)
+    return re.sub(r'\\\[(.+?)\\\]', lambda m: '$$' + ' '.join(m.group(1).split()) + '$$', content, flags=re.S)
+
+
+def _pandoc_paragraph(text):
+    """Convert one Markdown line with LaTeX math to a docx paragraph element (real Word equations)."""
+    import copy
+    import tempfile
+    import pypandoc
+    from docx import Document
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, 'p.docx')
+        pypandoc.convert_text(text, 'docx', format='markdown+tex_math_dollars+tex_math_single_backslash', outputfile=out)
+        paragraphs = Document(out).paragraphs
+        return copy.deepcopy(paragraphs[0]._p) if paragraphs else None
+
+
+def _add_math_paragraph(doc, text, style=None):
+    paragraph = doc.add_paragraph(style=style)
+    try:
+        source = _pandoc_paragraph(text)
+    except Exception:
+        source = None
+    if source is None:
+        _add_markdown_runs(paragraph, text)
+        return
+    for child in list(source):
+        if not child.tag.endswith('}pPr'):
+            paragraph._p.append(child)
+
+
 def _add_markdown(doc, content):
-    """Add simple Markdown (headings, bullets, numbered lists, bold) to a docx Document."""
-    for line in content.splitlines():
+    """Add simple Markdown (headings, bullets, numbered lists, bold, LaTeX math) to a docx Document."""
+    for line in _join_math_blocks(content).splitlines():
         stripped = line.strip()
+        if stripped.startswith('```'):
+            continue
         heading = re.match(r'^(#{1,6})\s+(.*)', stripped)
+        bullet = re.match(r'^[-*]\s+(.*)', stripped)
+        numbered = re.match(r'^\d+\.\s+(.*)', stripped)
         if heading:
-            doc.add_heading(heading.group(2).replace('**', ''), level=min(len(heading.group(1)), 4))
-        elif re.match(r'^[-*]\s+', stripped):
-            _add_markdown_runs(doc.add_paragraph(style='List Bullet'), re.sub(r'^[-*]\s+', '', stripped))
-        elif re.match(r'^\d+\.\s+', stripped):
-            _add_markdown_runs(doc.add_paragraph(style='List Number'), re.sub(r'^\d+\.\s+', '', stripped))
+            doc.add_heading(heading.group(2).replace('**', '').replace('$', ''), level=min(len(heading.group(1)), 4))
+            continue
+        if bullet:
+            text, style = bullet.group(1), 'List Bullet'
+        elif numbered:
+            text, style = numbered.group(1), 'List Number'
         elif stripped and set(stripped) != {'-'}:
-            _add_markdown_runs(doc.add_paragraph(), stripped)
+            text, style = stripped, None
+        else:
+            continue
+        if MATH_RE.search(text):
+            _add_math_paragraph(doc, text, style)
+        else:
+            _add_markdown_runs(doc.add_paragraph(style=style), text)
+
+
+def fix_docx_math(target):
+    """Turn paragraphs that contain LaTeX ($$...$$, $...$) into real Word equations. Returns how many."""
+    from docx import Document
+    doc = Document(target)
+    count = 0
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        if not MATH_RE.search(text):
+            continue
+        try:
+            source = _pandoc_paragraph(text)
+        except Exception:
+            continue
+        if source is None:
+            continue
+        for child in list(paragraph._p):
+            if not child.tag.endswith('}pPr'):
+                paragraph._p.remove(child)
+        for child in list(source):
+            if not child.tag.endswith('}pPr'):
+                paragraph._p.append(child)
+        count += 1
+    if count:
+        doc.save(target)
+    return count
 
 
 def write_docx(target, content):
@@ -195,6 +269,7 @@ def replace_in_file(base, rel_path, old, new):
                     p.runs[0].text = text
             if count:
                 doc.save(target)
+                fix_docx_math(target)
         else:
             with open(target, 'r', encoding='utf-8', errors='ignore') as f:
                 text = f.read()
