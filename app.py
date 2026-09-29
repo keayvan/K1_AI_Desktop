@@ -5,10 +5,10 @@ import streamlit as st
 from ollama import Client
 
 from core import storage
-from core.agent import decision_prompt, analysis_prompt, run_plan
+from core.agent import PLAN_SCHEMA, decision_prompt, analysis_prompt, run_plan
 from core.tools import extract_json, get_folder_context, get_system_stats, process_uploaded_file
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 st.set_page_config(page_title=f"K1 AI Desktop v{APP_VERSION}", layout="wide")
 
@@ -250,7 +250,7 @@ if user_input:
             status.markdown(f"**2. Planning with {model}** (raw model output)")
             plan_box = status.empty()
             full_response = ""
-            for chunk in client.generate(model=model, prompt=decision_prompt(context, user_input), stream=True, think=False):
+            for chunk in client.generate(model=model, prompt=decision_prompt(context, user_input), stream=True, think=False, format=PLAN_SCHEMA):
                 check_stop()
                 full_response += chunk['response']
                 plan_box.code(full_response, language="json")

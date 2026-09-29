@@ -8,6 +8,26 @@ MAX_COMMANDS = 2
 MAX_WRITES = 3
 MAX_DELETES = 5
 
+# Passed to Ollama as `format` so the model must return valid JSON with these keys.
+PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "files": {"type": "array", "items": {"type": "string"}},
+        "commands": {"type": "array", "items": {"type": "string"}},
+        "write": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"],
+            },
+        },
+        "delete": {"type": "array", "items": {"type": "string"}},
+        "plan": {"type": "string"},
+    },
+    "required": ["files", "commands", "write", "delete", "plan"],
+}
+
 
 def decision_prompt(context, user_input):
     return f"""{context}
