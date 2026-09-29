@@ -12,7 +12,26 @@ A local AI desktop assistant built with Streamlit and [Ollama](https://ollama.co
 
 ## Run
 ```bash
-pip install -r requirements.txt
-ollama pull qwen3:8b
-streamlit run app.py
+./run.sh
 ```
+The first run creates `.venv/` and installs `requirements.txt`. Then pull a model:
+```bash
+ollama pull qwen3:8b
+```
+To keep Ollama's models inside this folder, run `./setup_models.sh` once (needs sudo).
+
+## Structure
+```
+app.py            Streamlit UI
+core/storage.py   projects and chat history (data/)
+core/tools.py     read files, read-only commands, write files (.docx too)
+core/agent.py     prompts and plan execution
+run.sh            start the app with .venv
+setup_models.sh   move Ollama models into models/
+data/             chats and projects.json   (not in git)
+models/           Ollama models             (not in git)
+projects/         default project folders   (not in git)
+```
+
+## Safety
+In project mode the AI can only run read-only commands (`ls`, `cat`, `grep`, `find`, `git log/diff/status`, ...), without a shell, so pipes and `&&` do not work. Reading and writing is limited to the project folder.
