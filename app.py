@@ -8,7 +8,7 @@ from core import storage
 from core.agent import decision_prompt, analysis_prompt, run_plan
 from core.tools import extract_json, get_folder_context, get_system_stats, process_uploaded_file
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 st.set_page_config(page_title=f"K1 AI Desktop v{APP_VERSION}", layout="wide")
 

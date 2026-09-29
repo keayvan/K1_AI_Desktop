@@ -69,8 +69,11 @@ def execute_command(cmd, cwd):
     if args[0] == 'git' and args[1] in {'log', 'diff', 'show'}:
         args[2:2] = ['--no-ext-diff', '--no-textconv']
     try:
-        result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=15)
-        output = (result.stdout + result.stderr)[:3000]
+        result = subprocess.run(args, cwd=cwd, capture_output=True, timeout=15)
+        raw = result.stdout + result.stderr
+        if b'\x00' in raw[:8000] or raw.startswith(b'PK\x03\x04') or raw.startswith(b'%PDF'):
+            return '[Binary output (e.g. .docx, .pdf, image). Use "files" to read documents instead of commands.]'
+        output = raw.decode('utf-8', errors='replace')[:3000]
         return output or "[Empty]"
     except subprocess.TimeoutExpired:
         return "[Timeout]"

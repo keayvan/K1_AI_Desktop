@@ -16,7 +16,7 @@ User: {user_input}
 
 RESPOND WITH ONLY JSON (no other text). Keys:
 - "files": files to read (paths relative to the project folder)
-- "commands": read-only commands to run. Allowed: {', '.join(sorted(READ_ONLY_COMMANDS))} (git only: {', '.join(sorted(GIT_READ_ONLY))}). No pipes, redirects or &&.
+- "commands": read-only commands to run. Allowed: {', '.join(sorted(READ_ONLY_COMMANDS))} (git only: {', '.join(sorted(GIT_READ_ONLY))}). No pipes, redirects or &&. To read a file (including .docx), put it in "files", not in a command.
 - "write": files to create or overwrite, as {{"path": "...", "content": "..."}} (for .docx, write the content as Markdown; it is converted to a real Word file)
 - "delete": files or folders to delete (they are moved to the Trash, so the user can restore them). Only when the user asks to delete.
 - "plan": what you will do
