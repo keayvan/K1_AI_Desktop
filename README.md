@@ -24,7 +24,7 @@ To keep Ollama's models inside this folder, run `./setup_models.sh` once (needs 
 ```
 app.py            Streamlit UI
 core/storage.py   projects and chat history (data/)
-core/tools.py     read files, read-only commands, write files (.docx too)
+core/tools.py     read files, read-only commands, write files (.docx too), delete to Trash
 core/agent.py     prompts and plan execution
 run.sh            start the app with .venv
 setup_models.sh   move Ollama models into models/
@@ -34,4 +34,4 @@ projects/         default project folders   (not in git)
 ```
 
 ## Safety
-In project mode the AI can only run read-only commands (`ls`, `cat`, `grep`, `find`, `git log/diff/status`, ...), without a shell, so pipes and `&&` do not work. Reading and writing is limited to the project folder.
+In project mode the AI can only run read-only commands (`ls`, `cat`, `grep`, `find`, `git log/diff/status`, ...), without a shell, so pipes and `&&` do not work. Reading, writing and deleting are limited to the project folder. Deleted files go to the system Trash, so they can be restored.

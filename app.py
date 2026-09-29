@@ -8,7 +8,7 @@ from core import storage
 from core.agent import decision_prompt, analysis_prompt, run_plan
 from core.tools import extract_json, get_folder_context, get_system_stats, process_uploaded_file
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 st.set_page_config(page_title=f"K1 AI Desktop v{APP_VERSION}", layout="wide")
 
@@ -259,7 +259,7 @@ if user_input:
 
             decision = extract_json(full_response)
             log_step(f"Plan: {decision.get('plan', '')}",
-                     json.dumps({k: decision.get(k, []) for k in ('files', 'commands', 'write')}, indent=2, ensure_ascii=False), "json")
+                     json.dumps({k: decision.get(k, []) for k in ('files', 'commands', 'write', 'delete')}, indent=2, ensure_ascii=False), "json")
 
             results = run_plan(decision, folder, log_step, check_stop)
             check_stop()

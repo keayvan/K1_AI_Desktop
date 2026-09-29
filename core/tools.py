@@ -118,6 +118,24 @@ def write_file(base, rel_path, content):
         return f"[Error: {e}]"
 
 
+def trash_file(base, rel_path):
+    """Move a file or folder inside the project to the system Trash (recoverable)."""
+    target = resolve_in_folder(base, rel_path)
+    if not target:
+        return f"[Not allowed: {rel_path} is outside the project folder]"
+    if target == os.path.realpath(base):
+        return "[Not allowed: cannot delete the project folder itself]"
+    if not os.path.lexists(target):
+        return "[Not found]"
+    try:
+        result = subprocess.run(['/usr/bin/gio', 'trash', target], capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return f"[Error: {result.stderr.strip()}]"
+        return f"[Moved to Trash: {target}]"
+    except Exception as e:
+        return f"[Error: {e}]"
+
+
 def scan_folder(folder_path, max_files=30):
     items = []
     try:
