@@ -1,0 +1,5 @@
+streamlit
+ollama
+psutil
+python-docx
+PyPDF2
